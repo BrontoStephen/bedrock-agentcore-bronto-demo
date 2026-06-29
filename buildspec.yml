@@ -1,0 +1,24 @@
+version: 0.2
+
+# Weekly rebuild: pulls the latest patched base image, applies OS security
+# updates (see docker/Dockerfile.app), pushes to ECR, and forces a fresh ECS
+# deployment so the running task picks up the new image.
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      - BUILD_TAG="$(date +%Y%m%d)-${CODEBUILD_BUILD_NUMBER:-manual}"
+  build:
+    commands:
+      - echo "Building image (pulling fresh base layers)..."
+      - docker build --pull -f docker/Dockerfile.app -t "$ECR_REPO:latest" -t "$ECR_REPO:$BUILD_TAG" .
+  post_build:
+    commands:
+      - echo "Pushing image..."
+      - docker push "$ECR_REPO:latest"
+      - docker push "$ECR_REPO:$BUILD_TAG"
+      - echo "Forcing new ECS deployment..."
+      - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment --region "$AWS_REGION"
+      - echo "Done. Deployed $ECR_REPO:$BUILD_TAG"

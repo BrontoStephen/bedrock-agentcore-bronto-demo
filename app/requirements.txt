@@ -1,0 +1,20 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# AWS SDK
+boto3==1.35.90
+
+# OpenTelemetry SDK + OTLP/HTTP exporter
+opentelemetry-api==1.43.0
+opentelemetry-sdk==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+
+# Zero-code auto-instrumentation.
+# NOTE: botocore >= 0.55b0 ships the Bedrock GenAI extension (bedrock.py /
+# bedrock_utils.py) that emits gen_ai.* span attributes (token usage, model)
+# and prompt/response content. 0.50b0 had NO Bedrock support at all.
+opentelemetry-distro==0.64b0
+opentelemetry-instrumentation-fastapi==0.64b0
+opentelemetry-instrumentation-botocore==0.64b0
+opentelemetry-instrumentation-logging==0.64b0

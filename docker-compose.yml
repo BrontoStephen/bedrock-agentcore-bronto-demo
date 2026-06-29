@@ -1,0 +1,40 @@
+# Local smoke test: app + ADOT collector, mirroring the ECS task layout.
+# Requires a .env file (see .env.example) and working AWS credentials.
+
+services:
+  collector:
+    image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      BRONTO_API_KEY: ${BRONTO_API_KEY}
+      BRONTO_OTLP_BASE: ${BRONTO_OTLP_BASE:-https://ingestion.eu.bronto.io}
+    ports:
+      - "4318:4318"
+      - "13133:13133"
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    depends_on:
+      - collector
+    environment:
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-eu.amazon.nova-micro-v1:0}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: bedrock-bronto-demo
+      DEPLOYMENT_ENV: local
+      # Turn on the experimental Bedrock GenAI semconv (tokens/model/content).
+      OTEL_SEMCONV_STABILITY_OPT_IN: gen_ai_latest_experimental
+      # Capture prompt/response content on GenAI spans/events for the demo.
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true"
+      # Temporary AWS credentials, passed through from the shell. Populate with:
+      #   eval "$(aws configure export-credentials --format env)"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    ports:
+      - "8000:8000"

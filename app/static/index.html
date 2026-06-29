@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bedrock → Bronto demo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        max-width: 760px; margin: 0 auto; padding: 24px;
+        background: #0d1117; color: #e6edf3;
+      }
+      h1 { font-size: 1.3rem; }
+      .sub { color: #8b949e; font-size: .85rem; margin-top: -8px; }
+      textarea {
+        width: 100%; min-height: 90px; padding: 12px; border-radius: 8px;
+        border: 1px solid #30363d; background: #161b22; color: inherit; font: inherit;
+      }
+      button {
+        margin-top: 10px; padding: 10px 18px; border: 0; border-radius: 8px;
+        background: #2f81f7; color: white; font-weight: 600; cursor: pointer;
+      }
+      button:disabled { opacity: .5; cursor: default; }
+      .answer {
+        margin-top: 20px; padding: 16px; border-radius: 8px;
+        background: #161b22; border: 1px solid #30363d; white-space: pre-wrap;
+      }
+      .meta {
+        margin-top: 10px; font-size: .8rem; color: #8b949e;
+        display: flex; gap: 16px; flex-wrap: wrap;
+      }
+      .meta span b { color: #e6edf3; }
+    </style>
+  </head>
+  <body>
+    <h1>Bedrock → Bronto demo</h1>
+    <p class="sub">Sends a prompt to Amazon Bedrock. Logs, metrics &amp; traces flow to Bronto via OpenTelemetry.</p>
+
+    <textarea id="prompt" placeholder="Ask the model something…">Explain what OpenTelemetry is in two sentences.</textarea>
+    <br />
+    <button id="send">Send to Bedrock</button>
+
+    <div id="out" class="answer" hidden></div>
+    <div id="meta" class="meta" hidden></div>
+
+    <script>
+      const btn = document.getElementById("send");
+      const out = document.getElementById("out");
+      const meta = document.getElementById("meta");
+
+      btn.addEventListener("click", async () => {
+        const prompt = document.getElementById("prompt").value.trim();
+        if (!prompt) return;
+        btn.disabled = true;
+        out.hidden = false;
+        meta.hidden = true;
+        out.textContent = "Thinking…";
+        try {
+          const res = await fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "request failed");
+          out.textContent = data.text;
+          meta.hidden = false;
+          meta.innerHTML =
+            `<span>model <b>${data.model}</b></span>` +
+            `<span>in <b>${data.input_tokens}</b> tok</span>` +
+            `<span>out <b>${data.output_tokens}</b> tok</span>` +
+            `<span>latency <b>${data.latency_ms}</b> ms</span>`;
+        } catch (e) {
+          out.textContent = "Error: " + e.message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
