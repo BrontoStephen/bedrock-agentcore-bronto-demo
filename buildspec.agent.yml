@@ -1,0 +1,26 @@
+# CodeBuild buildspec for the weekly patch pipeline.
+# Reinstalls the starter toolkit and re-runs the deploy; because the runtime uses
+# direct_code_deploy with an unpinned requirements.txt, this pulls the latest
+# (patched) versions of all agent dependencies and rolls the runtime to them.
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - python -m pip install --upgrade pip
+      # uv is required by the toolkit's direct_code_deploy packaging.
+      - pip install uv bedrock-agentcore-starter-toolkit
+  build:
+    commands:
+      # The deploy manifest is gitignored (machine/account-specific); regenerate
+      # it here if this checkout doesn't already carry one.
+      - |
+        if [ ! -f agent/.bedrock_agentcore.yaml ]; then
+          (cd agent && agentcore configure -e agent.py -n agentcore_bronto_demo \
+             -r "${AWS_REGION:-eu-west-1}" -rf requirements.txt \
+             --disable-otel --disable-memory --non-interactive)
+        fi
+      - chmod +x scripts/redeploy.sh
+      - ./scripts/redeploy.sh

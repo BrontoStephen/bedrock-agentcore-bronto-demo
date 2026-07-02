@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DOCKER_CONTAINER=1
+
+# Apply OS security updates at build time. Combined with `docker build --pull`
+# in the weekly CI job, this keeps the image current with the latest patched
+# base image + Debian security fixes (what the weekly account scan flags).
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY agent/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY agent/ ./
+
+# BedrockAgentCoreApp.run() serves /invocations (POST) and /ping (GET) on 8080.
+EXPOSE 8080
+
+# Telemetry is configured in-process (telemetry.py), exported via OTLP to the
+# collector. The runtime sets DISABLE_ADOT_OBSERVABILITY=true so AWS's managed
+# pipeline stays out of the way.
+CMD ["python", "agent.py"]

@@ -1,0 +1,61 @@
+# ADOT (AWS Distro for OpenTelemetry) Collector config.
+# Receives OTLP from the agent over loopback (local) / the task's private network
+# (ECS) and forwards logs, metrics and traces to Bronto's per-signal OTLP/HTTP
+# endpoints. Copied from the Bedrock demo — the agent talks only to this
+# collector, which holds the Bronto credential.
+#
+# Env vars expected at runtime:
+#   BRONTO_API_KEY        - injected from AWS Secrets Manager (ECS) / .env (local)
+#   BRONTO_OTLP_BASE      - e.g. https://ingestion.eu.bronto.io  (EU) or .us. (US)
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 5s
+  # Tag everything with where it came from so it's easy to filter in Bronto.
+  resource:
+    attributes:
+      - key: telemetry.exporter
+        value: adot-collector
+        action: upsert
+
+exporters:
+  otlphttp/bronto:
+    logs_endpoint: ${env:BRONTO_OTLP_BASE}/v1/logs
+    metrics_endpoint: ${env:BRONTO_OTLP_BASE}/v1/metrics
+    traces_endpoint: ${env:BRONTO_OTLP_BASE}/v1/traces
+    headers:
+      x-bronto-api-key: ${env:BRONTO_API_KEY}
+  # Mirror to the collector's own logs for debugging export failures.
+  debug:
+    verbosity: normal
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp/bronto, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp/bronto, debug]
+    logs:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp/bronto, debug]
