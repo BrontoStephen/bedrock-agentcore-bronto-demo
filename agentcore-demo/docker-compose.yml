@@ -1,0 +1,51 @@
+# Local smoke test: agent + ADOT collector, mirroring the ECS/runtime layout.
+# Requires a .env file (see .env.example) and working AWS credentials.
+#
+#   cp .env.example .env            # fill in BRONTO_API_KEY
+#   eval "$(aws configure export-credentials --format env)"   # temp creds for boto3
+#   docker compose up --build
+#   curl -s localhost:8080/ping
+#   curl -s localhost:8080/invocations -H 'content-type: application/json' \
+#        -d '{"prompt":"Triage the checkout service"}'
+
+services:
+  collector:
+    image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      BRONTO_API_KEY: ${BRONTO_API_KEY}
+      BRONTO_OTLP_BASE: ${BRONTO_OTLP_BASE:-https://ingestion.eu.bronto.io}
+    ports:
+      - "4318:4318"
+      - "13133:13133"
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    depends_on:
+      - collector
+    environment:
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-eu.amazon.nova-pro-v1:0}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: agentcore-bronto-demo
+      # StrandsTelemetry builds its trace resource from OTEL_RESOURCE_ATTRIBUTES;
+      # this is what routes traces to the `agentcore-bronto-demo` Bronto dataset.
+      OTEL_RESOURCE_ATTRIBUTES: service.name=agentcore-bronto-demo,service.namespace=bronto-demos
+      DEPLOYMENT_ENV: local
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true"
+      # AgentCore Memory (optional; agent runs statelessly if AGENTCORE_MEMORY_ID is empty).
+      AGENTCORE_MEMORY_ID: ${AGENTCORE_MEMORY_ID:-}
+      AGENTCORE_SEMANTIC_STRATEGY_ID: ${AGENTCORE_SEMANTIC_STRATEGY_ID:-}
+      AGENT_ACTOR_ID: ${AGENT_ACTOR_ID:-telemetry-triage}
+      # Temporary AWS credentials, passed through from the shell. Populate with:
+      #   eval "$(aws configure export-credentials --format env)"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    ports:
+      - "8080:8080"

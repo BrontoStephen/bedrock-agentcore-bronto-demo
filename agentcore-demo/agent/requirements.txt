@@ -1,0 +1,18 @@
+# --- AgentCore runtime + Strands agent framework ---
+# These move fast; the weekly patch pipeline runs `pip install -U` to keep them
+# (and their transitive deps) current ahead of the account's vuln scanner.
+bedrock-agentcore
+strands-agents
+strands-agents-tools
+# MCP client used to consume the AgentCore Gateway (also a transitive dep).
+mcp
+
+# --- OpenTelemetry: explicit OTLP/HTTP export to the collector ---
+# We do NOT use `opentelemetry-instrument` / aws-opentelemetry-distro here: the
+# runtime sets DISABLE_ADOT_OBSERVABILITY=true and we configure the providers
+# ourselves (see telemetry.py) so all signals go straight to our collector.
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-botocore
+opentelemetry-instrumentation-logging
+
+boto3

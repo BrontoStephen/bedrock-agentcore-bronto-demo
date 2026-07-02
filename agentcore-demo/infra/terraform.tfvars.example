@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (gitignored) and fill in your values.
+
+runtime_arn = "arn:aws:bedrock-agentcore:eu-west-1:<account-id>:runtime/agentcore_bronto_demo-XXXXXXXX"
+
+# Passed to the weekly patch CodeBuild so redeploy.sh can re-deploy with the right config:
+bronto_api_key_secret_arn      = "arn:aws:secretsmanager:eu-west-1:<account-id>:secret:bedrock-bronto-demo/bronto-api-key-XXXXXX"
+agentcore_memory_id            = "agentcore_bronto_demo-XXXXXXXX"
+agentcore_semantic_strategy_id = "triage_semantic-XXXXXXXX"
+gateway_secret_arn             = "arn:aws:secretsmanager:eu-west-1:<account-id>:secret:agentcore-bronto-demo/gateway-client-XXXXXX"
