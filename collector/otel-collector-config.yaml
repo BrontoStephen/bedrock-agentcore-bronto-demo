@@ -32,6 +32,16 @@ processors:
       - key: telemetry.exporter
         value: adot-collector
         action: upsert
+  # Strands hardcodes the deprecated 2024-era token attribute names alongside
+  # the current gen_ai.usage.input_tokens / output_tokens; drop the deprecated
+  # duplicates so queries in Bronto have exactly one name per number.
+  # (ADOT doesn't bundle the transform processor, so use attributes/delete.)
+  attributes/genai_semconv:
+    actions:
+      - key: gen_ai.usage.prompt_tokens
+        action: delete
+      - key: gen_ai.usage.completion_tokens
+        action: delete
 
 exporters:
   otlphttp/bronto:
@@ -63,7 +73,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai_semconv, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     metrics:
       receivers: [otlp]
