@@ -32,12 +32,22 @@ processors:
       - key: telemetry.exporter
         value: adot-collector
         action: upsert
-  # Strands hardcodes the deprecated 2024-era token attribute names alongside
-  # the current gen_ai.usage.input_tokens / output_tokens; drop the deprecated
-  # duplicates so queries in Bronto have exactly one name per number.
-  # (ADOT doesn't bundle the transform processor, so use attributes/delete.)
+  # Normalise remaining legacy GenAI attributes to the current semconv:
+  # - Strands hardcodes the deprecated 2024-era token attribute names alongside
+  #   the current gen_ai.usage.input_tokens / output_tokens; drop the deprecated
+  #   duplicates so queries in Bronto have exactly one name per number.
+  # - The botocore Bedrock extension still emits the deprecated gen_ai.system
+  #   (=aws.bedrock) on its chat spans, token metrics and content events;
+  #   rename it to gen_ai.provider.name (insert copies only when the target is
+  #   absent, so Strands' own provider.name is never touched).
+  # (ADOT doesn't bundle the transform processor, so use attributes actions.)
   attributes/genai_semconv:
     actions:
+      - key: gen_ai.provider.name
+        from_attribute: gen_ai.system
+        action: insert
+      - key: gen_ai.system
+        action: delete
       - key: gen_ai.usage.prompt_tokens
         action: delete
       - key: gen_ai.usage.completion_tokens
@@ -77,9 +87,9 @@ service:
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     metrics:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai_semconv, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     logs:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai_semconv, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
