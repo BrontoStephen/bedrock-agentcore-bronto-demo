@@ -13,22 +13,35 @@ GenAI traces — a richer, continuous observability showcase.
  (on-demand UI)     ┘    ├─ Memory            (cross-session recall)
                          └─ Gateway (MCP)     (Lambda-backed tool)
                               │ OpenTelemetry (DISABLE_ADOT_OBSERVABILITY=true)
-                              ▼  direct OTLP/HTTP + x-bronto-api-key (from Secrets Manager)
-                         https://ingestion.eu.bronto.io/v1/{logs,metrics,traces}
-                              dataset: agentcore-bronto-demo
+                              ▼  OTLP/HTTP (public internet)
+                         ALB ──► ECS Fargate: ADOT collector (agentcore-demo/infra/)
+                              ├─ x-bronto-api-key  ──► Bronto account #1
+                              └─ x-bronto-api-key-2 ─► Bronto account #2 (optional)
+                                 https://ingestion.<region>.bronto.io/v1/{logs,metrics,traces}
+                                 dataset: agentcore-bronto-demo
 ```
 
 The agent is a **site-reliability "telemetry triage" assistant**: each invocation it pulls
 synthetic service-health metrics, analyses them in the Code Interpreter, recalls prior runs
 from Memory to spot trends, and (via the Gateway MCP tool) timestamps its assessment.
 
-## Why direct OTLP (no collector in the cloud)
+## Collector architecture (and dual Bronto accounts)
 
-The agent's own telemetry is the richest signal and is emitted at 100% fidelity over OTLP.
-The deployed runtime exports **straight to Bronto** — no collector, VPC, NAT or ECS. The
-ADOT collector (`collector/`, `docker-compose.yml`) is used only for **local** development.
-`telemetry.py` fetches the Bronto key from Secrets Manager at startup so it never lives in
-the image or plaintext config.
+The deployed runtime never holds Bronto credentials or talks to Bronto directly. It ships
+OTLP/HTTP to a small always-on **ECS Fargate + ALB collector-only service**
+(`agentcore-demo/infra/network.tf`, `alb.tf`, `ecs.tf`, `iam.tf`, `secrets.tf`) — the same ADOT
+collector image and config (`collector/otel-collector-config.yaml`) used for local dev, just
+reachable over the public internet instead of `localhost:4318`. The ALB has to accept from
+`0.0.0.0/0` because the AgentCore Runtime runs in AWS's managed PUBLIC network mode with no
+fixed egress IP to allowlist.
+
+The collector broadcasts every signal to **up to two Bronto accounts** — a second
+`otlphttp/bronto2` exporter runs alongside the first in every pipeline. Leave
+`bronto_api_key_2` / `bronto_otlp_base_2` unset (the default) to only export to one account;
+fill them in via `terraform.tfvars` to activate the second, no code changes needed.
+
+> A prior iteration of this demo had the runtime export straight to Bronto (no collector) —
+> preserved as-is on the `agentcore-direct-otlp-single-account` branch for reference.
 
 ## Layout
 
@@ -36,28 +49,29 @@ the image or plaintext config.
 agent/            Strands agent (BedrockAgentCoreApp entrypoint), telemetry, tools,
                   AgentCore Memory provisioning (provision_memory.py)
 gateway/          AgentCore Gateway + Lambda target provisioning (provision_gateway.py)
-collector/        ADOT collector config — LOCAL dev only (otlp -> Bronto)
+collector/        ADOT collector config (otlp receiver -> otlphttp to both Bronto accounts) -
+                  used both locally (docker-compose) and by the deployed collector service
 docker/           Agent image (also used by the local smoke test)
 docker-compose.yml  Local smoke test: agent + collector
-infra/            Terraform: driver Lambda (UI Function URL + EventBridge schedule) + weekly
-                  CodeBuild patch pipeline
+infra/            Terraform: collector ECS Fargate + ALB, driver Lambda (UI Function URL +
+                  EventBridge schedule), weekly CodeBuild patch pipeline
 scripts/redeploy.sh + buildspec.agent.yml   Reproducible deploy / weekly dependency patch
 ```
 
 ## Prerequisites
 
-- AWS credentials for `eu-west-1` with Bedrock + AgentCore + Lambda/IAM/CodeBuild access.
+- AWS credentials for `eu-west-1` with Bedrock + AgentCore + ECS/ALB/Lambda/IAM/CodeBuild
+  access.
 - Bedrock model access. Anthropic Claude is gated on some accounts; this demo uses **Amazon
   Nova Pro** (`eu.amazon.nova-pro-v1:0`), which supports tool use.
-- A Bronto ingestion API key in Secrets Manager (the agent reads it via
-  `BRONTO_API_KEY_SECRET_ARN`).
+- A Bronto ingestion API key (a second is optional — see "Collector architecture" above).
 - `pip install bedrock-agentcore-starter-toolkit` for the `agentcore` CLI.
 
 ## Run locally
 
 ```bash
 cd agentcore-demo
-cp .env.example .env                 # fill in BRONTO_API_KEY (+ optional Memory ids)
+cp .env.example .env                 # fill in BRONTO_API_KEY (+ optional 2nd account, Memory ids)
 eval "$(aws configure export-credentials --format env)"
 docker compose up --build
 curl -s localhost:8080/invocations -H 'content-type: application/json' \
@@ -65,41 +79,55 @@ curl -s localhost:8080/invocations -H 'content-type: application/json' \
 ```
 
 Traces/logs/metrics land in the Bronto `agentcore-bronto-demo` dataset (routed by
-`service.name`).
+`service.name`), in both accounts if the second is configured.
 
 ## Deploy to AgentCore Runtime
 
 ```bash
-# 1) (optional) provision AgentCore Memory + Gateway, note the printed ids/ARNs
+# 1) stand up the collector service (+ driver, see below) — first apply only has
+#    ecs/alb/secrets resources you care about; run again once collector_otlp_endpoint exists
+cd infra
+terraform init
+export TF_VAR_bronto_api_key='<your-first-bronto-key>'
+# export TF_VAR_bronto_api_key_2='<your-second-bronto-key>'   # optional
+terraform apply
+terraform output collector_otlp_endpoint    # feed this into scripts/deploy.env below
+
+# 2) (optional) provision AgentCore Memory + Gateway, note the printed ids/ARNs
+cd ..
 python agent/provision_memory.py
 python gateway/provision_gateway.py
 
-# 2) configure + deploy the runtime (direct OTLP to Bronto)
+# 3) configure + deploy the runtime (OTLP -> collector service, not Bronto directly)
 cd agent
 agentcore configure -e agent.py -n agentcore_bronto_demo -r eu-west-1 \
   -rf requirements.txt --disable-otel --disable-memory --non-interactive
-cd .. && ./scripts/redeploy.sh        # wraps `agentcore deploy` with the env vars
+cd ..
+cp scripts/deploy.env.example scripts/deploy.env   # fill in COLLECTOR_OTLP_ENDPOINT + Memory id
+./scripts/redeploy.sh        # wraps `agentcore deploy` with the env vars
 
-# 3) invoke
+# 4) invoke
 agentcore invoke '{"prompt":"Triage the payments service","session_id":"demo"}'
 ```
 
-The runtime execution role needs `bedrock:InvokeModel*`, `bedrock-agentcore:*`, and
-`secretsmanager:GetSecretValue` on the Bronto (and Gateway) secrets.
+The runtime execution role needs `bedrock:InvokeModel*` and `bedrock-agentcore:*` — it no
+longer needs Secrets Manager access, since it never touches the Bronto credentials.
 
 ## Drivers + always-on patching
 
 ```bash
 cd infra
-terraform init && terraform apply        # driver Lambda + UI Function URL + EventBridge (10m)
-                                         # + weekly CodeBuild that re-runs the deploy
+terraform apply        # collector ECS+ALB + driver Lambda + UI Function URL + EventBridge (10m)
+                       # + weekly CodeBuild that re-runs the deploy
 ```
 
 - **On-demand UI**: an IAM-authenticated Lambda Function URL (call it SigV4-signed).
 - **Periodic**: EventBridge invokes the agent every 10 minutes → a steady trace stream.
 - **Weekly patch**: CodeBuild re-runs `scripts/redeploy.sh`; because the runtime uses
   `direct_code_deploy` with an unpinned `requirements.txt`, this pulls the latest patched
-  dependencies and rolls the runtime — keeping it ahead of vulnerability scans.
+  dependencies and rolls the runtime — keeping it ahead of vulnerability scans. Set
+  `collector_otlp_endpoint` (and the other account-specific vars) in `terraform.tfvars` so
+  the CodeBuild job can pass it through.
 
 ## Notes / gotchas
 
@@ -110,4 +138,7 @@ terraform init && terraform apply        # driver Lambda + UI Function URL + Eve
   also written as structured `extra=` logs for queryability.
 - Bronto **metrics** ingestion is currently a closed beta.
 - AgentCore Gateway prefixes target tool names (e.g. `tools___get_time`).
+- The collector's ALB target group health-checks port `13133` (the ADOT `health_check`
+  extension) while routing OTLP traffic to port `4318` — they're different ports on the same
+  container.
 ```

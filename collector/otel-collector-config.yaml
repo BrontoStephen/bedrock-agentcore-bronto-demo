@@ -7,6 +7,13 @@
 # Env vars expected at runtime:
 #   BRONTO_API_KEY        - injected from AWS Secrets Manager (ECS) / .env (local)
 #   BRONTO_OTLP_BASE      - e.g. https://ingestion.eu.bronto.io  (EU) or .us. (US)
+#
+# Fans out to a SECOND Bronto account too (broadcast, not split) so the same
+# telemetry lands in both. Leave BRONTO_API_KEY_2 / BRONTO_OTLP_BASE_2 empty
+# until a second account is provisioned - the otlphttp/bronto2 exporter will
+# just log export failures on its own, without affecting the first account.
+#   BRONTO_API_KEY_2      - second account's ingestion key
+#   BRONTO_OTLP_BASE_2    - second account's OTLP base URL
 
 receivers:
   otlp:
@@ -33,6 +40,13 @@ exporters:
     traces_endpoint: ${env:BRONTO_OTLP_BASE}/v1/traces
     headers:
       x-bronto-api-key: ${env:BRONTO_API_KEY}
+  # Second Bronto account - same signals, broadcast in parallel.
+  otlphttp/bronto2:
+    logs_endpoint: ${env:BRONTO_OTLP_BASE_2}/v1/logs
+    metrics_endpoint: ${env:BRONTO_OTLP_BASE_2}/v1/metrics
+    traces_endpoint: ${env:BRONTO_OTLP_BASE_2}/v1/traces
+    headers:
+      x-bronto-api-key: ${env:BRONTO_API_KEY_2}
   # Mirror to the collector's own logs for debugging export failures.
   debug:
     verbosity: normal
@@ -50,12 +64,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [resource, batch]
-      exporters: [otlphttp/bronto, debug]
+      exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     metrics:
       receivers: [otlp]
       processors: [resource, batch]
-      exporters: [otlphttp/bronto, debug]
+      exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     logs:
       receivers: [otlp]
       processors: [resource, batch]
-      exporters: [otlphttp/bronto, debug]
+      exporters: [otlphttp/bronto, otlphttp/bronto2, debug]

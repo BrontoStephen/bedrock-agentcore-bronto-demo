@@ -25,11 +25,13 @@ sed -i.bak -E "s#^( *entrypoint:).*#\1 ${ABS}/agent.py#; s#^( *source_path:).*#\
 rm -f .bedrock_agentcore.yaml.bak
 
 : "${AWS_REGION:=eu-west-1}"
-: "${BRONTO_OTLP_BASE:=https://ingestion.eu.bronto.io}"
 : "${BEDROCK_MODEL_ID:=eu.amazon.nova-pro-v1:0}"
 : "${AGENT_ACTOR_ID:=telemetry-triage}"
 # Required account-specific values (no defaults — set them in scripts/deploy.env):
-: "${BRONTO_API_KEY_SECRET_ARN:?set BRONTO_API_KEY_SECRET_ARN (see scripts/deploy.env.example)}"
+# The agent no longer talks to Bronto directly - it ships OTLP to the collector
+# service (infra/, terraform output collector_otlp_endpoint), which holds the
+# Bronto credentials and fans out to both accounts.
+: "${COLLECTOR_OTLP_ENDPOINT:?set COLLECTOR_OTLP_ENDPOINT (see scripts/deploy.env.example; terraform output collector_otlp_endpoint from infra/)}"
 : "${AGENTCORE_MEMORY_ID:?set AGENTCORE_MEMORY_ID (run agent/provision_memory.py)}"
 # Optional (agent degrades gracefully if unset):
 : "${AGENTCORE_SEMANTIC_STRATEGY_ID:=}"
@@ -39,12 +41,11 @@ export AGENTCORE_SUPPRESS_RECOMMENDATION=1
 
 agentcore deploy --auto-update-on-conflict \
   --env DISABLE_ADOT_OBSERVABILITY=true \
-  --env OTEL_EXPORTER_OTLP_ENDPOINT="${BRONTO_OTLP_BASE}" \
+  --env OTEL_EXPORTER_OTLP_ENDPOINT="${COLLECTOR_OTLP_ENDPOINT}" \
   --env OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
   --env OTEL_SERVICE_NAME=agentcore-bronto-demo \
   --env SERVICE_NAMESPACE=bronto-demos \
   --env DEPLOYMENT_ENV=aws \
-  --env BRONTO_API_KEY_SECRET_ARN="${BRONTO_API_KEY_SECRET_ARN}" \
   --env AGENTCORE_MEMORY_ID="${AGENTCORE_MEMORY_ID}" \
   --env AGENTCORE_SEMANTIC_STRATEGY_ID="${AGENTCORE_SEMANTIC_STRATEGY_ID}" \
   --env AGENT_ACTOR_ID="${AGENT_ACTOR_ID}" \

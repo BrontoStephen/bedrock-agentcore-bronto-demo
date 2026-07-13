@@ -17,10 +17,10 @@ variable "runtime_arn" {
 
 # Account-specific values passed to the weekly patch CodeBuild as env vars so the
 # repo stays free of account IDs / ARNs. Set real values in terraform.tfvars.
-variable "bronto_api_key_secret_arn" {
+variable "collector_otlp_endpoint" {
   type        = string
   default     = ""
-  description = "Secrets Manager ARN holding the Bronto ingestion API key."
+  description = "OTLP/HTTP endpoint of the collector ALB (terraform output collector_otlp_endpoint). The agent sends all telemetry here instead of directly to Bronto."
 }
 
 variable "agentcore_memory_id" {
@@ -51,4 +51,49 @@ variable "bronto_dataset_url" {
   type        = string
   default     = ""
   description = "Optional deep link to the Bronto dataset, shown in the UI."
+}
+
+# --- Collector service (ECS Fargate + ALB) -----------------------------------
+# The deployed AgentCore Runtime sends OTLP here instead of straight to
+# Bronto; the collector holds the credentials and fans out to both accounts.
+
+variable "bronto_otlp_base" {
+  type        = string
+  default     = "https://ingestion.eu.bronto.io"
+  description = "First Bronto account's OTLP ingestion base URL (per-signal /v1/{logs,metrics,traces} appended by the collector)."
+}
+
+variable "bronto_api_key" {
+  type        = string
+  sensitive   = true
+  description = "First Bronto account's ingestion API key. Pass via TF_VAR_bronto_api_key or -var; stored in Secrets Manager."
+}
+
+variable "bronto_otlp_base_2" {
+  type        = string
+  default     = ""
+  description = "Second Bronto account's OTLP ingestion base URL. Leave blank until a second account is provisioned - the collector fans out to it in addition to (not instead of) the first account."
+}
+
+variable "bronto_api_key_2" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Second Bronto account's ingestion API key. Leave blank until a second account is provisioned."
+}
+
+variable "task_cpu" {
+  type        = number
+  default     = 512
+}
+
+variable "task_memory" {
+  type        = number
+  default     = 1024
+}
+
+variable "desired_count" {
+  type        = number
+  default     = 1
+  description = "Number of collector ECS tasks to run."
 }

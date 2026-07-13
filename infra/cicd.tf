@@ -92,8 +92,8 @@ resource "aws_codebuild_project" "patch" {
     # Account-specific deploy config supplied to redeploy.sh at build time, so the
     # repo itself carries no account IDs / ARNs.
     environment_variable {
-      name  = "BRONTO_API_KEY_SECRET_ARN"
-      value = var.bronto_api_key_secret_arn
+      name  = "COLLECTOR_OTLP_ENDPOINT"
+      value = var.collector_otlp_endpoint
     }
     environment_variable {
       name  = "AGENTCORE_MEMORY_ID"

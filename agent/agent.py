@@ -162,6 +162,34 @@ def _build_session_manager(session_id: str):
     return AgentCoreMemorySessionManager(config, region_name=REGION)
 
 
+def _valid_history(msgs) -> bool:
+    """True if a restored conversation can be safely continued with a new user turn.
+
+    Converse rejects histories that don't start with a plain user message, don't
+    alternate roles, carry unmatched toolUse/toolResult pairs, or end mid-turn.
+    Memory restores a truncated window of events, so any of these can happen
+    after a crashed/failed turn.
+    """
+    if not msgs:
+        return True
+    prev_role = None
+    pending_tool_ids: set = set()
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content") or []
+        if role == prev_role:
+            return False  # roles must alternate
+        tool_uses = {b["toolUse"]["toolUseId"] for b in content if "toolUse" in b}
+        tool_results = {b["toolResult"]["toolUseId"] for b in content if "toolResult" in b}
+        if tool_results != pending_tool_ids:
+            return False  # toolResult must answer exactly the preceding toolUse
+        pending_tool_ids = tool_uses
+        prev_role = role
+    if pending_tool_ids:
+        return False  # dangling toolUse at the end
+    return msgs[0].get("role") == "user" and msgs[-1].get("role") == "assistant"
+
+
 def _make_agent(session_id: str, extra_tools=()) -> Agent:
     """Build an agent for the session (Memory-backed if configured)."""
     kwargs = {
@@ -172,7 +200,21 @@ def _make_agent(session_id: str, extra_tools=()) -> Agent:
     session_manager = _build_session_manager(session_id)
     if session_manager is not None:
         kwargs["session_manager"] = session_manager
-    return Agent(**kwargs)
+    agent = Agent(**kwargs)
+    # If the restored window is corrupt, start the turn with a clean slate
+    # rather than failing the invocation; long-term recall still comes from the
+    # semantic Memory strategy, which is retrieved independently of this list.
+    if not _valid_history(agent.messages):
+        log.warning(
+            "session.history_reset",
+            extra={
+                "event.name": "session.history_reset",
+                "session.id": session_id,
+                "messages.dropped": len(agent.messages),
+            },
+        )
+        agent.messages.clear()
+    return agent
 
 
 def _run(prompt: str, session_id: str):

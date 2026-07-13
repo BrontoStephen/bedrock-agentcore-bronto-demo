@@ -1,9 +1,12 @@
 """OpenTelemetry bootstrap for the AgentCore -> Bronto demo.
 
-Configures the three signal providers and points them at the local OTLP/HTTP
-collector (the ECS sidecar / docker-compose service). The agent talks only to
-the collector; the collector holds the Bronto credentials and exports each
-signal to the matching Bronto OTLP endpoint, keeping this code vendor-neutral.
+Configures the three signal providers and points them at the OTLP/HTTP
+collector - locally the docker-compose service, in AWS the standalone
+ECS Fargate + ALB collector service (``agentcore-demo/infra/``) that the
+AgentCore Runtime reaches over the internet. The agent never holds Bronto
+credentials or talks to Bronto directly; the collector does, and fans each
+signal out to both configured Bronto accounts (see
+``../collector/otel-collector-config.yaml``).
 
 Design choice: we configure telemetry **explicitly** rather than relying on
 `opentelemetry-instrument` + aws-opentelemetry-distro. The AgentCore Runtime is
@@ -54,36 +57,11 @@ def _build_resource() -> Resource:
     )
 
 
-def _maybe_inject_bronto_headers() -> None:
-    """When exporting straight to Bronto (deployed runtime, no collector), put the
-    Bronto API key in the OTLP header. The key is read from Secrets Manager
-    (``BRONTO_API_KEY_SECRET_ARN``) or ``BRONTO_API_KEY`` so it never has to live
-    in the image or plaintext runtime config. Local dev points OTLP at the
-    collector instead and sets neither, so this is a no-op there.
-    """
-    if os.getenv("OTEL_EXPORTER_OTLP_HEADERS"):
-        return  # caller supplied headers explicitly
-    key = os.getenv("BRONTO_API_KEY")
-    secret_arn = os.getenv("BRONTO_API_KEY_SECRET_ARN")
-    if not key and secret_arn:
-        import boto3
-
-        region = os.getenv("AWS_REGION", "eu-west-1")
-        key = boto3.client("secretsmanager", region_name=region).get_secret_value(
-            SecretId=secret_arn
-        )["SecretString"]
-    if key:
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"x-bronto-api-key={key}"
-
-
 def setup_telemetry() -> None:
     """Idempotently configure the three signal providers and instrumentations."""
     global _CONFIGURED
     if _CONFIGURED:
         return
-
-    # Must run before StrandsTelemetry / the OTLP exporters read the env.
-    _maybe_inject_bronto_headers()
 
     # Strands builds its trace resource from OTEL_RESOURCE_ATTRIBUTES; derive it
     # from the simpler scalar env vars so deployment only needs OTEL_SERVICE_NAME

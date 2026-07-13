@@ -8,7 +8,8 @@ acvenv/
 *.tfstate.*
 .terraform.lock.hcl
 infra/builds/
-tfplan
+# Saved terraform plans embed sensitive variable values - never commit.
+tfplan*
 *.tfplan
 *.bak
 # Toolkit-built local dependency bundle (large build artifact; recreated on deploy).
