@@ -24,7 +24,57 @@ GenAI traces — a richer, continuous observability showcase.
 
 The agent is a **site-reliability "telemetry triage" assistant**: each invocation it pulls
 synthetic service-health metrics, analyses them in the Code Interpreter, recalls prior runs
-from Memory to spot trends, and (via the Gateway MCP tool) timestamps its assessment.
+from Memory to spot trends, and (via the Gateway MCP tool) timestamps its assessment. It
+finishes with a healthy/degraded/unhealthy verdict, the single most important number, and a
+recommended action.
+
+## What data it generates
+
+Telemetry flows **automatically, with no user action**: EventBridge invokes the agent every
+10 minutes, so all of the below streams into Bronto continuously (dataset
+`agentcore-bronto-demo`, routed by `service.name`). Every invocation produces:
+
+| Signal | Source | What lands in Bronto |
+|---|---|---|
+| **Traces (GenAI)** | Strands' built-in telemetry | `invoke_agent` (agent tools + `gen_ai.tool.definitions`), one `chat` span per model turn (model id, finish reason, `gen_ai.usage.input_tokens`/`output_tokens`), `execute_tool <name>` per tool call, `execute_event_loop_cycle` per reasoning step. Prompt/response content rides on `gen_ai.client.inference.operation.details` span events as `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions`. `gen_ai.provider.name=strands-agents`. |
+| **Traces (AWS SDK)** | `opentelemetry-instrumentation-botocore` | Child spans for every AWS call the agent makes: `Bedrock Runtime.Converse` (with its own GenAI attributes, `gen_ai.provider.name=aws.bedrock`), AgentCore `Memory`/`Code Interpreter` data-plane calls, `Secrets Manager.GetSecretValue` — RPC semconv (`rpc.system`, `rpc.service`, `rpc.method`). |
+| **Logs** | OTel `LoggingHandler` bridge ([agent/telemetry.py](agent/telemetry.py)) | Structured, trace-correlated log records: `event.name=agent.invoke` (prompt size, session id, memory/gateway flags) and `event.name=agent.result` (model, full `agent.response` text as a queryable field), plus warnings/exceptions. The botocore Bedrock extension also emits prompt/response content events here. |
+| **Metrics** | custom meters + botocore | `demo.agent.invocations` (by model + outcome), `demo.agent.tool_calls` (by tool), and botocore's `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` histograms per model call. |
+
+All three signals share `trace_id`/`span_id` correlation, so a Bronto log line links back to
+the exact span (and vice versa).
+
+## GenAI semantic conventions (latest)
+
+The OTel GenAI conventions are still experimental and Strands defaults to the older 2024
+(v1.36) shape — deprecated `gen_ai.system` and per-role message events. This demo opts into
+the **latest experimental conventions** end to end:
+
+- **Opt-in env var** (the sanctioned migration switch, read by Strands ≥ 1.47):
+
+  ```bash
+  OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_tool_definitions
+  ```
+
+  It is defaulted in [agent/telemetry.py](agent/telemetry.py) (merged with any pre-set
+  value) and set explicitly in [docker-compose.yml](docker-compose.yml) and
+  [scripts/redeploy.sh](scripts/redeploy.sh), so local and deployed runs behave identically.
+  `gen_ai_latest_experimental` switches to `gen_ai.provider.name` +
+  `gen_ai.input.messages`/`gen_ai.output.messages`; `gen_ai_tool_definitions` adds the
+  agent's full tool schemas to `invoke_agent` spans.
+- **Collector normalisation** ([collector/otel-collector-config.yaml](collector/otel-collector-config.yaml),
+  `attributes/genai_semconv` processor): strips the deprecated
+  `gen_ai.usage.prompt_tokens`/`completion_tokens` duplicates Strands still hardcodes, and
+  renames the botocore Bedrock extension's legacy `gen_ai.system=aws.bedrock` to
+  `gen_ai.provider.name` (that package hasn't migrated yet; insert-only, so Strands' own
+  value is never overwritten).
+
+Net effect: **nothing keyed on deprecated names reaches Bronto** — query
+`gen_ai.provider.name`, `gen_ai.usage.input_tokens`/`output_tokens`, never `gen_ai.system` or
+`gen_ai.usage.prompt_tokens`. Since both the conventions and Strands' implementation are
+experimental and the weekly patch pipeline installs latest, check the
+[strands-agents release notes](https://github.com/strands-agents/sdk-python/releases) if
+`gen_ai.*` dashboards ever go quiet.
 
 ## Collector architecture (and dual Bronto accounts)
 
@@ -141,4 +191,3 @@ terraform apply        # collector ECS+ALB + driver Lambda + UI Function URL + E
 - The collector's ALB target group health-checks port `13133` (the ADOT `health_check`
   extension) while routing OTLP traffic to port `4318` — they're different ports on the same
   container.
-```
