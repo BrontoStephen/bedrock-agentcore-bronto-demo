@@ -2,7 +2,7 @@
 
 Configures the three signal providers and points them at the OTLP/HTTP
 collector - locally the docker-compose service, in AWS the standalone
-ECS Fargate + ALB collector service (``agentcore-demo/infra/``) that the
+ECS Fargate + ALB collector service (``infra/``) that the
 AgentCore Runtime reaches over the internet. The agent never holds Bronto
 credentials or talks to Bronto directly; the collector does, and fans each
 signal out to both configured Bronto accounts (see

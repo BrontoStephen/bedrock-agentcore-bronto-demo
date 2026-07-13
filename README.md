@@ -2,7 +2,8 @@
 
 A long-running demo that runs an AI agent on **AWS Bedrock AgentCore** and streams its
 **OpenTelemetry** traces, logs and metrics into [Bronto.io](https://bronto.io). It is the
-agentic sibling of the single-call Bedrock demo in the repo root: where that emits one
+agentic sibling of the single-call
+[Bedrock demo](https://github.com/BrontoStephen/bedrock-bronto-demo): where that emits one
 `Converse` span, this runs a multi-step agent loop with tool calls, producing deep, nested
 GenAI traces — a richer, continuous observability showcase.
 
@@ -14,7 +15,7 @@ GenAI traces — a richer, continuous observability showcase.
                          └─ Gateway (MCP)     (Lambda-backed tool)
                               │ OpenTelemetry (DISABLE_ADOT_OBSERVABILITY=true)
                               ▼  OTLP/HTTP (public internet)
-                         ALB ──► ECS Fargate: ADOT collector (agentcore-demo/infra/)
+                         ALB ──► ECS Fargate: ADOT collector (infra/)
                               ├─ x-bronto-api-key  ──► Bronto account #1
                               └─ x-bronto-api-key-2 ─► Bronto account #2 (optional)
                                  https://ingestion.<region>.bronto.io/v1/{logs,metrics,traces}
@@ -29,7 +30,7 @@ from Memory to spot trends, and (via the Gateway MCP tool) timestamps its assess
 
 The deployed runtime never holds Bronto credentials or talks to Bronto directly. It ships
 OTLP/HTTP to a small always-on **ECS Fargate + ALB collector-only service**
-(`agentcore-demo/infra/network.tf`, `alb.tf`, `ecs.tf`, `iam.tf`, `secrets.tf`) — the same ADOT
+(`infra/network.tf`, `alb.tf`, `ecs.tf`, `iam.tf`, `secrets.tf`) — the same ADOT
 collector image and config (`collector/otel-collector-config.yaml`) used for local dev, just
 reachable over the public internet instead of `localhost:4318`. The ALB has to accept from
 `0.0.0.0/0` because the AgentCore Runtime runs in AWS's managed PUBLIC network mode with no
@@ -70,7 +71,6 @@ scripts/redeploy.sh + buildspec.agent.yml   Reproducible deploy / weekly depende
 ## Run locally
 
 ```bash
-cd agentcore-demo
 cp .env.example .env                 # fill in BRONTO_API_KEY (+ optional 2nd account, Memory ids)
 eval "$(aws configure export-credentials --format env)"
 docker compose up --build
