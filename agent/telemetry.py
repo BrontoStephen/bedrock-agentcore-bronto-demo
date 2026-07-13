@@ -16,6 +16,10 @@ out of the way; everything below ships straight to our collector.
 - Traces: owned by Strands (``StrandsTelemetry``), which emits GenAI
   semantic-convention spans for the agent loop, model calls (token usage,
   model id) and tool calls, exported via OTLP to ``OTEL_EXPORTER_OTLP_ENDPOINT``.
+  We opt into the latest experimental GenAI conventions (see
+  ``OTEL_SEMCONV_STABILITY_OPT_IN`` below) so spans carry
+  ``gen_ai.provider.name`` and ``gen_ai.input.messages`` /
+  ``gen_ai.output.messages`` rather than the deprecated 2024-era shape.
 - Metrics + logs: configured here with their own OTLP exporters so our custom
   meters and structured ``extra=`` logs arrive in Bronto as first-class fields.
 - ``BotocoreInstrumentor`` traces the boto3 calls the agent makes to AgentCore
@@ -30,8 +34,30 @@ from __future__ import annotations
 import logging
 import os
 
-# Capture prompt/response content on GenAI spans/events for the demo.
+# Capture prompt/response content on GenAI spans/events for the demo. Strands
+# ignores this (it captures content unless redaction is opted into via
+# OTEL_SEMCONV_STABILITY_OPT_IN); the botocore Bedrock extension reads it.
 os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+
+# Emit the latest (experimental) OTel GenAI semantic conventions instead of the
+# legacy v1.36 shape Strands defaults to:
+#   gen_ai_latest_experimental - gen_ai.provider.name instead of the deprecated
+#     gen_ai.system, and message content on gen_ai.client.inference.operation.details
+#     events as gen_ai.input.messages / gen_ai.output.messages /
+#     gen_ai.system_instructions instead of the deprecated per-role
+#     gen_ai.{system,user,assistant,tool}.message / gen_ai.choice events.
+#   gen_ai_tool_definitions - adds gen_ai.tool.definitions to invoke_agent spans.
+# Merged (not overwritten) so platform-set opt-ins (e.g. http) survive.
+_GENAI_OPT_INS = ("gen_ai_latest_experimental", "gen_ai_tool_definitions")
+
+
+def _opt_in_latest_genai_semconv() -> None:
+    current = [v.strip() for v in os.getenv("OTEL_SEMCONV_STABILITY_OPT_IN", "").split(",") if v.strip()]
+    merged = current + [t for t in _GENAI_OPT_INS if t not in current]
+    os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = ",".join(merged)
+
+
+_opt_in_latest_genai_semconv()
 
 from opentelemetry import metrics
 from opentelemetry._logs import set_logger_provider
