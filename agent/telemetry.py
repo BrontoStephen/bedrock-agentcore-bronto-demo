@@ -76,8 +76,8 @@ _CONFIGURED = False
 def _build_resource() -> Resource:
     return Resource.create(
         {
-            "service.name": os.getenv("OTEL_SERVICE_NAME", "agentcore-bronto-demo"),
-            "service.namespace": os.getenv("SERVICE_NAMESPACE", "bronto-demos"),
+            "service.name": os.getenv("OTEL_SERVICE_NAME", "AWS AgentCore"),
+            "service.namespace": os.getenv("SERVICE_NAMESPACE", "AWS LLM Services"),
             "deployment.environment": os.getenv("DEPLOYMENT_ENV", "demo"),
         }
     )
@@ -92,8 +92,8 @@ def setup_telemetry() -> None:
     # Strands builds its trace resource from OTEL_RESOURCE_ATTRIBUTES; derive it
     # from the simpler scalar env vars so deployment only needs OTEL_SERVICE_NAME
     # (avoids passing a comma-laden value through the deploy CLI).
-    svc = os.getenv("OTEL_SERVICE_NAME", "agentcore-bronto-demo")
-    ns = os.getenv("SERVICE_NAMESPACE", "bronto-demos")
+    svc = os.getenv("OTEL_SERVICE_NAME", "AWS AgentCore")
+    ns = os.getenv("SERVICE_NAMESPACE", "AWS LLM Services")
     env = os.getenv("DEPLOYMENT_ENV", "demo")
     os.environ.setdefault(
         "OTEL_RESOURCE_ATTRIBUTES",

@@ -87,7 +87,7 @@ def _html() -> str:
     bronto_link = (
         f'<a href="{BRONTO_DATASET_URL}" target="_blank">open the Bronto dataset</a>'
         if BRONTO_DATASET_URL
-        else "your Bronto <code>agentcore-bronto-demo</code> dataset"
+        else "your Bronto <code>AWS AgentCore</code> dataset"
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/>
