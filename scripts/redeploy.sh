@@ -43,9 +43,9 @@ agentcore deploy --auto-update-on-conflict \
   --env DISABLE_ADOT_OBSERVABILITY=true \
   --env OTEL_EXPORTER_OTLP_ENDPOINT="${COLLECTOR_OTLP_ENDPOINT}" \
   --env OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
-  --env OTEL_SERVICE_NAME=agentcore-bronto-demo \
+  --env OTEL_SERVICE_NAME="AWS AgentCore" \
   --env OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_tool_definitions \
-  --env SERVICE_NAMESPACE=bronto-demos \
+  --env SERVICE_NAMESPACE="AWS LLM Services" \
   --env DEPLOYMENT_ENV=aws \
   --env AGENTCORE_MEMORY_ID="${AGENTCORE_MEMORY_ID}" \
   --env AGENTCORE_SEMANTIC_STRATEGY_ID="${AGENTCORE_SEMANTIC_STRATEGY_ID}" \

@@ -19,7 +19,7 @@ GenAI traces — a richer, continuous observability showcase.
                               ├─ x-bronto-api-key  ──► Bronto account #1
                               └─ x-bronto-api-key-2 ─► Bronto account #2 (optional)
                                  https://ingestion.<region>.bronto.io/v1/{logs,metrics,traces}
-                                 dataset: agentcore-bronto-demo
+                                 dataset: AWS AgentCore
 ```
 
 The agent is a **site-reliability "telemetry triage" assistant**: each invocation it pulls
@@ -32,7 +32,7 @@ recommended action.
 
 Telemetry flows **automatically, with no user action**: EventBridge invokes the agent every
 10 minutes, so all of the below streams into Bronto continuously (dataset
-`agentcore-bronto-demo`, routed by `service.name`). Every invocation produces:
+`AWS AgentCore`, routed by `service.name`, reporting as `AWS LLM Services` via `service.namespace`). Every invocation produces:
 
 | Signal | Source | What lands in Bronto |
 |---|---|---|
@@ -128,7 +128,7 @@ curl -s localhost:8080/invocations -H 'content-type: application/json' \
   -d '{"prompt":"Triage the checkout service"}'
 ```
 
-Traces/logs/metrics land in the Bronto `agentcore-bronto-demo` dataset (routed by
+Traces/logs/metrics land in the Bronto `AWS AgentCore` dataset (routed by
 `service.name`), in both accounts if the second is configured.
 
 ## Deploy to AgentCore Runtime
