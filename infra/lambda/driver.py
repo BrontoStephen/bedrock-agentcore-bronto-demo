@@ -20,12 +20,23 @@ import time
 import uuid
 
 import boto3
+from botocore.config import Config
 
 RUNTIME_ARN = os.environ["RUNTIME_ARN"]
 REGION = os.environ.get("AWS_REGION", "eu-west-1")
 BRONTO_DATASET_URL = os.environ.get("BRONTO_DATASET_URL", "")
 
-_client = boto3.client("bedrock-agentcore", region_name=REGION)
+# Wait (just) longer than an agent run may take, and never retry: a boto3 read
+# timeout re-sends the invocation while the first one is still running on the
+# runtime, so every retry is another full, billed agent run. Before 2026-09-14
+# that, plus Lambda's async retries, ran the agent ~6x per scheduled tick.
+# The read timeout stays under the function's 120 s timeout so the failure is
+# ours (logged, returned) rather than a Lambda timeout.
+_client = boto3.client(
+    "bedrock-agentcore",
+    region_name=REGION,
+    config=Config(connect_timeout=5, read_timeout=110, retries={"total_max_attempts": 1}),
+)
 
 SCENARIOS = ("no_tools", "flaky_tools", "subagent")
 MODELS = ("eu.amazon.nova-pro-v1:0", "eu.amazon.nova-lite-v1:0")
