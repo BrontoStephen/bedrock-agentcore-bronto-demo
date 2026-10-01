@@ -26,16 +26,14 @@ rm -f .bedrock_agentcore.yaml.bak
 
 : "${AWS_REGION:=eu-west-1}"
 : "${BEDROCK_MODEL_ID:=eu.amazon.nova-pro-v1:0}"
-: "${AGENT_ACTOR_ID:=telemetry-triage}"
 # Required account-specific values (no defaults — set them in scripts/deploy.env):
 # The agent no longer talks to Bronto directly - it ships OTLP to the collector
 # service (infra/, terraform output collector_otlp_endpoint), which holds the
 # Bronto credentials and fans out to both accounts.
 : "${COLLECTOR_OTLP_ENDPOINT:?set COLLECTOR_OTLP_ENDPOINT (see scripts/deploy.env.example; terraform output collector_otlp_endpoint from infra/)}"
-: "${AGENTCORE_MEMORY_ID:?set AGENTCORE_MEMORY_ID (run agent/provision_memory.py)}"
-# Optional (agent degrades gracefully if unset):
-: "${AGENTCORE_SEMANTIC_STRATEGY_ID:=}"
-: "${GATEWAY_SECRET_ARN:=}"
+# Scenario used when a request doesn't name one (the driver always does):
+# no_tools | flaky_tools | subagent. See agent/agent.py.
+: "${AGENT_SCENARIO:=flaky_tools}"
 
 export AGENTCORE_SUPPRESS_RECOMMENDATION=1
 
@@ -47,8 +45,5 @@ agentcore deploy --auto-update-on-conflict \
   --env OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_tool_definitions \
   --env SERVICE_NAMESPACE="AWS LLM Services" \
   --env DEPLOYMENT_ENV=aws \
-  --env AGENTCORE_MEMORY_ID="${AGENTCORE_MEMORY_ID}" \
-  --env AGENTCORE_SEMANTIC_STRATEGY_ID="${AGENTCORE_SEMANTIC_STRATEGY_ID}" \
-  --env AGENT_ACTOR_ID="${AGENT_ACTOR_ID}" \
   --env BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID}" \
-  --env GATEWAY_SECRET_ARN="${GATEWAY_SECRET_ARN}"
+  --env AGENT_SCENARIO="${AGENT_SCENARIO}"

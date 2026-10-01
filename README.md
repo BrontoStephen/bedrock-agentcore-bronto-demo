@@ -9,10 +9,10 @@ GenAI traces — a richer, continuous observability showcase.
 
 ```
                          AgentCore Runtime (eu-west-1, PUBLIC egress)
- EventBridge (10m) ─┐      Strands agent (Amazon Nova Pro)
- Lambda Function URL├─►  ├─ Code Interpreter  (sandboxed Python)
- (on-demand UI)     ┘    ├─ Memory            (cross-session recall)
-                         └─ Gateway (MCP)     (Lambda-backed tool)
+ EventBridge (10m) ─┐      Strands storefront assistant (Amazon Nova Pro / Lite)
+ Lambda Function URL├─►  ├─ scenario.no_tools     (talk step 1)
+ (on-demand UI)     ┘    ├─ scenario.flaky_tools  (talk step 2)
+                         └─ scenario.subagent     (talk step 3)
                               │ OpenTelemetry (DISABLE_ADOT_OBSERVABILITY=true)
                               ▼  OTLP/HTTP (public internet)
                          ALB ──► ECS Fargate: ADOT collector (infra/)
@@ -22,11 +22,21 @@ GenAI traces — a richer, continuous observability showcase.
                                  dataset: AWS AgentCore
 ```
 
-The agent is a **site-reliability "telemetry triage" assistant**: each invocation it pulls
-synthetic service-health metrics, analyses them in the Code Interpreter, recalls prior runs
-from Memory to spot trends, and (via the Gateway MCP tool) timestamps its assessment. It
-finishes with a healthy/degraded/unhealthy verdict, the single most important number, and a
-recommended action.
+The agent is the **Storefront customer assistant** from the Track A "Observability for AI"
+talk (`~/Code/Security/AWS AI Observability`, `bronto-community/track-a-observability-for-ai`).
+It answers questions about orders, stock and shipping for a small kitchenware shop. Each
+invocation runs one of the talk's three steps, picked by the request's `scenario` field. Each
+scenario has its own span names:
+
+| `scenario` | Talk step | Parent span | Agent span | What it shows |
+|---|---|---|---|---|
+| `no_tools` | 1 | `scenario.no_tools` | `invoke_agent storefront_no_tools` | No tools: the model writes the tool calls it wishes it had, as text, and invents an answer. ~80 input tokens. |
+| `flaky_tools` | 2 | `scenario.flaky_tools` | `invoke_agent storefront_with_tools` | `lookup_order`, `check_inventory`, and `get_shipping_eta`, which times out ~1 call in 4 (`SHIPPING_FAILURE_RATE`). Look for `execute_tool` with `gen_ai.tool.status=error`. Input tokens jump to ~2,400. |
+| `subagent` | 3 | `scenario.subagent` | `invoke_agent storefront_with_researcher` | Adds `product_researcher`, a second agent called as a tool (`execute_tool product_researcher` with an `invoke_agent` nested inside). The driver alternates Nova Pro and Nova Lite to compare cost and answer quality. The sub-agent's tokens are not in the parent span's total. |
+
+The EventBridge driver moves to the next scenario every 10 minutes (1 → 2 → 3). The Function
+URL UI has scenario and model dropdowns. AgentCore Memory, Code Interpreter and Gateway are no
+longer used by the agent; their provisioning scripts are kept for reference.
 
 ## What data it generates
 
@@ -37,12 +47,35 @@ Telemetry flows **automatically, with no user action**: EventBridge invokes the 
 | Signal | Source | What lands in Bronto |
 |---|---|---|
 | **Traces (GenAI)** | Strands' built-in telemetry | `invoke_agent` (agent tools + `gen_ai.tool.definitions`), one `chat` span per model turn (model id, finish reason, `gen_ai.usage.input_tokens`/`output_tokens`), `execute_tool <name>` per tool call, `execute_event_loop_cycle` per reasoning step. Prompt/response content rides on `gen_ai.client.inference.operation.details` span events as `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions`. `gen_ai.provider.name=strands-agents`. |
-| **Traces (AWS SDK)** | `opentelemetry-instrumentation-botocore` | Child spans for every AWS call the agent makes: `Bedrock Runtime.Converse` (with its own GenAI attributes, `gen_ai.provider.name=aws.bedrock`), AgentCore `Memory`/`Code Interpreter` data-plane calls, `Secrets Manager.GetSecretValue` — RPC semconv (`rpc.system`, `rpc.service`, `rpc.method`). |
-| **Logs** | OTel `LoggingHandler` bridge ([agent/telemetry.py](agent/telemetry.py)) | Structured, trace-correlated log records: `event.name=agent.invoke` (prompt size, session id, memory/gateway flags) and `event.name=agent.result` (model, full `agent.response` text as a queryable field), plus warnings/exceptions. The botocore Bedrock extension also emits prompt/response content events here. |
-| **Metrics** | custom meters + botocore | `demo.agent.invocations` (by model + outcome), `demo.agent.tool_calls` (by tool), and botocore's `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` histograms per model call. |
+| **Traces (AWS SDK)** | `opentelemetry-instrumentation-botocore` | A `chat` child span per `Bedrock Runtime.Converse` call (with its own GenAI attributes, `gen_ai.provider.name=aws.bedrock`, and `gen_ai.response.finish_reasons`), RPC semconv (`rpc.system`, `rpc.service`, `rpc.method`). |
+| **Logs** | OTel `LoggingHandler` on the `storefront-assistant` logger ([agent/telemetry.py](agent/telemetry.py)) | One `event.name=agent.invocation` record per question, as in Track A: `scenario`, tokens in/out (sub-agent included), `latency_ms`, `model_calls`, `tool_calls`, `tool_errors`, `subagent_calls`, `cost_usd_estimate`, `tools.failed`, and the question and answer text. Plus botocore's GenAI events (`gen_ai.system.message` / `gen_ai.user.message` / `gen_ai.choice`), flattened by `GenAIEventFlattener` (see below). |
+| **Metrics** | botocore + Strands | botocore's `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` histograms per model call, and Strands' own event-loop and token counters. |
 
 All three signals share `trace_id`/`span_id` correlation, so a Bronto log line links back to
 the exact span (and vice versa).
+
+### BRONTO-3347 workaround: `GenAIEventFlattener`
+
+Botocore's GenAI events put their text in a **map-valued log body** and their type in the OTLP
+`event_name` field. Bronto keeps neither today, so without help they arrive as empty rows that
+keep only `gen_ai.provider.name`. `GenAIEventFlattener` (a `LogRecordProcessor` in
+[agent/telemetry.py](agent/telemetry.py), registered before the batch exporter) copies
+`event_name` to `event.name`, flattens the body into `body.*` attributes (arrays as `.0`,
+`.1`, …, matching Bronto's own flattening), and makes the body a JSON string. Query
+`"$event.name" = 'gen_ai.choice'` and read `$body.message.content.0.text`. It's the same code
+as the Track A lab and the Bedrock demo; remove it once BRONTO-3347 is fixed.
+
+### Dashboard
+
+`dashboard/create_dashboard.py` builds "LLM KPIs — AgentCore Storefront", the Track A KPI
+dashboard pointed at the `AWS AgentCore` datasets, with per-scenario requests, latency and
+tokens:
+
+```bash
+BRONTO_API_KEY=<key with dashboard write> python3 dashboard/create_dashboard.py          # create
+BRONTO_API_KEY=<key> python3 dashboard/create_dashboard.py --check                       # latest values
+BRONTO_API_KEY=<key> python3 dashboard/create_dashboard.py --delete                      # remove
+```
 
 ## GenAI semantic conventions (latest)
 
@@ -125,7 +158,7 @@ cp .env.example .env                 # fill in BRONTO_API_KEY (+ optional 2nd ac
 eval "$(aws configure export-credentials --format env)"
 docker compose up --build
 curl -s localhost:8080/invocations -H 'content-type: application/json' \
-  -d '{"prompt":"Triage the checkout service"}'
+  -d '{"scenario":"flaky_tools","prompt":"Where is order 1042?"}'
 ```
 
 Traces/logs/metrics land in the Bronto `AWS AgentCore` dataset (routed by
@@ -157,7 +190,7 @@ cp scripts/deploy.env.example scripts/deploy.env   # fill in COLLECTOR_OTLP_ENDP
 ./scripts/redeploy.sh        # wraps `agentcore deploy` with the env vars
 
 # 4) invoke
-agentcore invoke '{"prompt":"Triage the payments service","session_id":"demo"}'
+agentcore invoke '{"scenario":"subagent","prompt":"Do you have espresso cups?"}'
 ```
 
 The runtime execution role needs `bedrock:InvokeModel*` and `bedrock-agentcore:*` — it no

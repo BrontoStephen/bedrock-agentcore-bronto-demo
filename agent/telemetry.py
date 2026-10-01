@@ -22,8 +22,8 @@ out of the way; everything below ships straight to our collector.
   ``gen_ai.output.messages`` rather than the deprecated 2024-era shape.
 - Metrics + logs: configured here with their own OTLP exporters so our custom
   meters and structured ``extra=`` logs arrive in Bronto as first-class fields.
-- ``BotocoreInstrumentor`` traces the boto3 calls the agent makes to AgentCore
-  primitives (Memory, Code Interpreter, Gateway) so they appear as child spans.
+- ``BotocoreInstrumentor`` traces the Bedrock Converse calls the agent makes
+  as child spans; its GenAI log events pass through ``GenAIEventFlattener``.
 
 All exporters read ``OTEL_EXPORTER_OTLP_ENDPOINT`` (default
 ``http://localhost:4318``) and append the per-signal path automatically.
@@ -31,8 +31,10 @@ All exporters read ``OTEL_EXPORTER_OTLP_ENDPOINT`` (default
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from collections.abc import Mapping
 
 # Capture prompt/response content on GenAI spans/events for the demo. Strands
 # ignores this (it captures content unless redaction is opted into via
@@ -64,13 +66,54 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler, LogRecordProcessor
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 _CONFIGURED = False
+
+
+class GenAIEventFlattener(LogRecordProcessor):
+    """Make Botocore's GenAI events readable in Bronto (workaround for BRONTO-3347).
+
+    Those events put their text in a map-valued log body and their type in the
+    OTLP event_name field. Bronto keeps neither today, so they arrive as empty
+    rows. Copy both into attributes before export: `event.name`, plus one
+    `body.<path>` attribute per leaf (Bronto flattens arrays the same way, as
+    .0, .1, ...). The body becomes the JSON text so @raw is readable too.
+    Register it BEFORE the BatchLogRecordProcessor.
+    """
+
+    def on_emit(self, record) -> None:
+        lr = record.log_record
+        name = getattr(lr, "event_name", None)
+        if name:
+            lr.attributes["event.name"] = name
+        if isinstance(lr.body, Mapping):
+            for key, value in _flatten(lr.body, "body"):
+                lr.attributes[key] = value
+            lr.body = json.dumps(lr.body, default=str)
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def _flatten(value, prefix):
+    if isinstance(value, Mapping):
+        for k, v in value.items():
+            yield from _flatten(v, f"{prefix}.{k}")
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            yield from _flatten(v, f"{prefix}.{i}")
+    elif isinstance(value, (str, bool, int, float)):
+        yield prefix, value
+    elif value is not None:
+        yield prefix, str(value)
 
 
 def _build_resource() -> Resource:
@@ -121,22 +164,27 @@ def setup_telemetry() -> None:
 
     # --- Logs ----------------------------------------------------------------
     logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(GenAIEventFlattener())  # must run before export
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
     set_logger_provider(logger_provider)
 
-    otel_handler = LoggingHandler(level=logging.INFO, logger_provider=logger_provider)
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    root.addHandler(otel_handler)
-    root.addHandler(logging.StreamHandler())
+    # Only the agent's own logger ships to Bronto: one structured event per
+    # question. Attaching to the root logger would also ship every library's
+    # INFO chatter (botocore credentials, AgentCore, Strands).
+    app_log = logging.getLogger("storefront-assistant")
+    app_log.setLevel(logging.INFO)
+    app_log.addHandler(LoggingHandler(level=logging.INFO, logger_provider=logger_provider))
+    app_log.addHandler(logging.StreamHandler())
+    app_log.propagate = False
 
     # --- Auto-instrumentation ------------------------------------------------
-    # Traces the boto3 calls to AgentCore primitives (Memory / Code Interpreter
-    # / Gateway) as child spans of the agent invocation.
-    BotocoreInstrumentor().instrument()
+    # The Bedrock Converse calls as child spans, plus a GenAI log event per
+    # message (system prompt, user turn, tool result, model reply), flattened
+    # by GenAIEventFlattener so Bronto keeps the text.
+    BotocoreInstrumentor().instrument(logger_provider=logger_provider)
 
     _CONFIGURED = True
-    logging.getLogger(__name__).info("OpenTelemetry configured for AgentCore -> Bronto demo")
+    app_log.info("OpenTelemetry configured for AgentCore -> Bronto demo")
 
 
 def get_meter(name: str = "agentcore-bronto-demo"):

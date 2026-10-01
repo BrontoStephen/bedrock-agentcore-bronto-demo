@@ -4,8 +4,8 @@ Two roles in one function:
   * Lambda Function URL (HTTP): serves a tiny on-demand UI (GET) and invokes the
     AgentCore Runtime on POST, returning the agent's result.
   * EventBridge Scheduler target: on a scheduled event (no HTTP request context),
-    invokes the runtime with a rotating service so a steady stream of multi-step
-    traces flows into Bronto continuously.
+    invokes the runtime with the next of the three Track A scenarios (no tools,
+    flaky tools, sub-agent), so all three stream into Bronto continuously.
 
 Telemetry is emitted by the agent runtime itself (straight to Bronto); this
 driver only triggers invocations.
@@ -16,26 +16,60 @@ from __future__ import annotations
 import json
 import os
 import random
+import time
 import uuid
 
 import boto3
+from botocore.config import Config
 
 RUNTIME_ARN = os.environ["RUNTIME_ARN"]
 REGION = os.environ.get("AWS_REGION", "eu-west-1")
 BRONTO_DATASET_URL = os.environ.get("BRONTO_DATASET_URL", "")
 
-_client = boto3.client("bedrock-agentcore", region_name=REGION)
+# Wait (just) longer than an agent run may take, and never retry: a boto3 read
+# timeout re-sends the invocation while the first one is still running on the
+# runtime, so every retry is another full, billed agent run. Before 2026-09-14
+# that, plus Lambda's async retries, ran the agent ~6x per scheduled tick.
+# The read timeout stays under the function's 120 s timeout so the failure is
+# ours (logged, returned) rather than a Lambda timeout.
+_client = boto3.client(
+    "bedrock-agentcore",
+    region_name=REGION,
+    config=Config(connect_timeout=5, read_timeout=110, retries={"total_max_attempts": 1}),
+)
 
-_SERVICES = ("checkout", "search", "payments", "recommendations", "auth")
+SCENARIOS = ("no_tools", "flaky_tools", "subagent")
+MODELS = ("eu.amazon.nova-pro-v1:0", "eu.amazon.nova-lite-v1:0")
+
+# Customer questions from the Track A lab, per scenario.
+QUESTIONS = {
+    "no_tools": (
+        "Where is order 1042, when will it arrive, and do you still have the blue ceramic mug?",
+        "Has order 1043 shipped yet?",
+    ),
+    "flaky_tools": (
+        "Where is order 1042, when will it arrive, and do you still have the blue ceramic mug?",
+        "Order 1044: has it arrived? Can I order another linen apron?",
+        "When will order 1042 get here?",
+        "Was order 1045 cancelled? Is the cast iron skillet back in stock?",
+    ),
+    "subagent": (
+        "Do you have espresso cups? If not, what would you suggest instead?",
+        "I want a french press. What can you offer?",
+        "Is the walnut cutting board in stock, and what goes well with it?",
+    ),
+}
 
 
-def _invoke(prompt: str, session_id: str) -> dict:
+def _invoke(prompt: str, session_id: str, scenario: str | None = None, model: str | None = None) -> dict:
     """Call the AgentCore Runtime and return the parsed result dict."""
     resp = _client.invoke_agent_runtime(
         agentRuntimeArn=RUNTIME_ARN,
         # AgentCore requires a 33+ char session id; two uuid hexes is plenty.
         runtimeSessionId=uuid.uuid4().hex + uuid.uuid4().hex,
-        payload=json.dumps({"prompt": prompt, "session_id": session_id}).encode(),
+        payload=json.dumps(
+            {"prompt": prompt, "session_id": session_id, "scenario": scenario, "model": model}
+        ).encode(),
         contentType="application/json",
         accept="application/json",
     )
@@ -46,12 +80,14 @@ def _invoke(prompt: str, session_id: str) -> dict:
 def handler(event, context):
     # --- Scheduled (EventBridge) path: no HTTP request context --------------
     if not isinstance(event, dict) or "requestContext" not in event:
-        service = random.choice(_SERVICES)
-        result = _invoke(
-            f"Triage the {service} service and flag anything worth paging on.",
-            session_id="triage-periodic",
-        )
-        return {"ok": True, "service": service, "result": result}
+        # One scenario per 10-minute slot, cycling 1 -> 2 -> 3. In the sub-agent
+        # scenario, alternate the expensive and the cheap model (step 3's comparison).
+        slot = int(time.time()) // 600
+        scenario = SCENARIOS[slot % len(SCENARIOS)]
+        model = MODELS[(slot // len(SCENARIOS)) % len(MODELS)] if scenario == "subagent" else None
+        prompt = random.choice(QUESTIONS[scenario])
+        result = _invoke(prompt, session_id="storefront-periodic", scenario=scenario, model=model)
+        return {"ok": True, "scenario": scenario, "model": model, "result": result}
 
     # --- Function URL HTTP path ---------------------------------------------
     method = event["requestContext"]["http"]["method"]
@@ -66,10 +102,12 @@ def handler(event, context):
         payload = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
         payload = {}
-    prompt = (payload.get("prompt") or "").strip() or "Triage the checkout service."
+    prompt = (payload.get("prompt") or "").strip() or QUESTIONS["flaky_tools"][0]
     session_id = payload.get("session_id") or "ui-session"
+    scenario = payload.get("scenario") if payload.get("scenario") in SCENARIOS else "flaky_tools"
+    model = payload.get("model") if payload.get("model") in MODELS else None
     try:
-        result = _invoke(prompt, session_id)
+        result = _invoke(prompt, session_id, scenario, model)
         return {
             "statusCode": 200,
             "headers": {"content-type": "application/json"},
@@ -105,15 +143,28 @@ def _html() -> str:
   button {{ margin-top: 10px; padding: 10px 18px; border: 0; border-radius: 8px;
     background: #2f81f7; color: white; font-weight: 600; cursor: pointer; }}
   button:disabled {{ opacity: .5; cursor: default; }}
+  label {{ display: inline-block; margin: 0 16px 10px 0; color: #8b949e; font-size: .85rem; }}
+  select {{ margin-left: 6px; padding: 6px; border-radius: 6px; border: 1px solid #30363d;
+    background: #161b22; color: inherit; font: inherit; }}
   .answer {{ margin-top: 20px; padding: 16px; border-radius: 8px; background: #161b22;
     border: 1px solid #30363d; white-space: pre-wrap; }}
 </style></head>
 <body>
   <h1>AgentCore → Bronto demo</h1>
-  <p class="sub">Invokes a Strands agent (Amazon Nova Pro) on AWS Bedrock AgentCore Runtime —
-  Code Interpreter + Memory. Traces, logs &amp; metrics flow to Bronto via OpenTelemetry.
-  See {bronto_link}.</p>
-  <textarea id="prompt">Triage the checkout service and tell me if we should page anyone.</textarea>
+  <p class="sub">The Track A storefront assistant (Strands + Amazon Nova) on AWS Bedrock AgentCore
+  Runtime. Traces, logs &amp; metrics flow to Bronto via OpenTelemetry. See {bronto_link}.</p>
+  <label>Scenario
+    <select id="scenario">
+      <option value="no_tools">1 · no tools (it invents)</option>
+      <option value="flaky_tools" selected>2 · tools, one flaky</option>
+      <option value="subagent">3 · sub-agent</option>
+    </select></label>
+  <label>Model
+    <select id="model">
+      <option value="eu.amazon.nova-pro-v1:0">Nova Pro</option>
+      <option value="eu.amazon.nova-lite-v1:0">Nova Lite</option>
+    </select></label>
+  <textarea id="prompt">Where is order 1042, when will it arrive, and do you still have the blue ceramic mug?</textarea>
   <br/><button id="send">Invoke agent</button>
   <div id="out" class="answer" hidden></div>
   <script>
@@ -125,9 +176,12 @@ def _html() -> str:
       try {{
         const res = await fetch("", {{ method: "POST",
           headers: {{ "content-type": "application/json" }},
-          body: JSON.stringify({{ prompt, session_id: "ui-session" }}) }});
+          body: JSON.stringify({{ prompt, session_id: "ui-session",
+            scenario: document.getElementById("scenario").value,
+            model: document.getElementById("model").value }}) }});
         const data = await res.json();
-        out.textContent = data.result || data.error || JSON.stringify(data);
+        out.textContent = data.error ? data.error
+          : data.result + (data.stats ? "\n\n" + JSON.stringify(data.stats, null, 2) : "");
       }} catch (e) {{ out.textContent = "Error: " + e.message; }}
       finally {{ btn.disabled = false; }}
     }});

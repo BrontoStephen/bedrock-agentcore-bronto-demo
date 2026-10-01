@@ -58,6 +58,15 @@ resource "aws_lambda_function" "driver" {
   }
 }
 
+# Scheduled invocations are async; Lambda retries a failed async call twice by
+# default, and each retry is another full, billed agent run. A missed tick is
+# fine (the next one is 10 minutes away), so don't retry, and drop stale events.
+resource "aws_lambda_function_event_invoke_config" "driver" {
+  function_name                = aws_lambda_function.driver.function_name
+  maximum_retry_attempts       = 0
+  maximum_event_age_in_seconds = 600
+}
+
 # --- On-demand UI: IAM-authenticated Function URL ----------------------------
 # Requests must be SigV4-signed by an IAM principal holding lambda:InvokeFunctionUrl
 # (e.g. `awscurl --service lambda ...` or `aws lambda invoke-... `). No public surface.
