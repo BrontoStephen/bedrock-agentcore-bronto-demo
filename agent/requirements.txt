@@ -2,12 +2,9 @@
 # These move fast; the weekly patch pipeline runs `pip install -U` to keep them
 # (and their transitive deps) current ahead of the account's vuln scanner.
 bedrock-agentcore
-# >=1.47 for the OTEL_SEMCONV_STABILITY_OPT_IN GenAI opt-ins telemetry.py relies
-# on (gen_ai_latest_experimental, gen_ai_tool_definitions).
-strands-agents>=1.47
-strands-agents-tools
-# MCP client used to consume the AgentCore Gateway (also a transitive dep).
-mcp
+# >=1.57 for the OTEL_SEMCONV_STABILITY_OPT_IN GenAI opt-ins telemetry.py relies
+# on (gen_ai_latest_experimental, gen_ai_tool_definitions), matching the Track A lab.
+strands-agents>=1.57
 
 # --- OpenTelemetry: explicit OTLP/HTTP export to the collector ---
 # We do NOT use `opentelemetry-instrument` / aws-opentelemetry-distro here: the

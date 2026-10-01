@@ -19,3 +19,5 @@ agent/.bedrock_agentcore.yaml
 # Local account-specific config (real values live here; commit only the .example).
 scripts/deploy.env
 *.tfvars
+# Dashboard ids created by dashboard/create_dashboard.py (org-specific).
+dashboard/state.json
