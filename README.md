@@ -48,22 +48,20 @@ Telemetry flows **automatically, with no user action**: EventBridge invokes the 
 |---|---|---|
 | **Traces (GenAI)** | Strands' built-in telemetry | `invoke_agent` (agent tools + `gen_ai.tool.definitions`), one `chat` span per model turn (model id, finish reason, `gen_ai.usage.input_tokens`/`output_tokens`), `execute_tool <name>` per tool call, `execute_event_loop_cycle` per reasoning step. Prompt/response content rides on `gen_ai.client.inference.operation.details` span events as `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions`. `gen_ai.provider.name=strands-agents`. |
 | **Traces (AWS SDK)** | `opentelemetry-instrumentation-botocore` | A `chat` child span per `Bedrock Runtime.Converse` call (with its own GenAI attributes, `gen_ai.provider.name=aws.bedrock`, and `gen_ai.response.finish_reasons`), RPC semconv (`rpc.system`, `rpc.service`, `rpc.method`). |
-| **Logs** | OTel `LoggingHandler` on the `storefront-assistant` logger ([agent/telemetry.py](agent/telemetry.py)) | One `event.name=agent.invocation` record per question, as in Track A: `scenario`, tokens in/out (sub-agent included), `latency_ms`, `model_calls`, `tool_calls`, `tool_errors`, `subagent_calls`, `cost_usd_estimate`, `tools.failed`, and the question and answer text. Plus botocore's GenAI events (`gen_ai.system.message` / `gen_ai.user.message` / `gen_ai.choice`), flattened by `GenAIEventFlattener` (see below). |
+| **Logs** | OTel `LoggingHandler` on the `storefront-assistant` logger ([agent/telemetry.py](agent/telemetry.py)) | One `event.name=agent.invocation` record per question, as in Track A: `scenario`, tokens in/out (sub-agent included), `latency_ms`, `model_calls`, `tool_calls`, `tool_errors`, `subagent_calls`, `cost_usd_estimate`, `tools.failed`, and the question and answer text. Plus botocore's GenAI events (`gen_ai.system.message` / `gen_ai.user.message` / `gen_ai.choice`) (see below). |
 | **Metrics** | botocore + Strands | botocore's `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` histograms per model call, and Strands' own event-loop and token counters. |
 
 All three signals share `trace_id`/`span_id` correlation, so a Bronto log line links back to
 the exact span (and vice versa).
 
-### BRONTO-3347 workaround: `GenAIEventFlattener`
+### GenAI events in Bronto
 
 Botocore's GenAI events put their text in a **map-valued log body** and their type in the OTLP
-`event_name` field. Bronto keeps neither today, so without help they arrive as empty rows that
-keep only `gen_ai.provider.name`. `GenAIEventFlattener` (a `LogRecordProcessor` in
-[agent/telemetry.py](agent/telemetry.py), registered before the batch exporter) copies
-`event_name` to `event.name`, flattens the body into `body.*` attributes (arrays as `.0`,
-`.1`, …, matching Bronto's own flattening), and makes the body a JSON string. Query
-`"$event.name" = 'gen_ai.choice'` and read `$body.message.content.0.text`. It's the same code
-as the Track A lab and the Bedrock demo; remove it once BRONTO-3347 is fixed.
+`event_name` field. Bronto stores both natively (BRONTO-3347, fixed November 2026): the body
+lands in `@raw` as JSON and is flattened into keys such as `content.0.text`, and `event_name`
+becomes `$event.name`. Query `"$event.name" = 'gen_ai.choice'` and read
+`$message.content.0.text`, as in the [Bronto Bedrock docs](https://docs.bronto.io/ai-features/aws-bedrock).
+(Data from before the fix used a client-side workaround with `$body.*` field names.)
 
 ### Dashboard
 
