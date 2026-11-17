@@ -60,7 +60,7 @@ Botocore's GenAI events put their text in a **map-valued log body** and their ty
 `event_name` field. Bronto stores both natively (BRONTO-3347, fixed November 2026): the body
 lands in `@raw` as JSON and is flattened into keys such as `content.0.text`, and `event_name`
 becomes `$event.name`. Query `"$event.name" = 'gen_ai.choice'` and read
-`$message.content.0.text`, as in the [Bronto Bedrock docs](https://docs.bronto.io/ai-features/aws-bedrock).
+`message.content.0.text` (body keys take no `$` prefix; only attributes do).
 (Data from before the fix used a client-side workaround with `$body.*` field names.)
 
 ### Dashboard
